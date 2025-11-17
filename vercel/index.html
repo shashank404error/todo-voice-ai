@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Shram: Demo - Voice Todo</title>
+  <style>
+    body {
+      font-family: Inter, system-ui, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f9fafb;
+      color: #111827;
+    }
+
+    h2 {
+      text-align: center;
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+
+    #status {
+      padding: 12px;
+      margin-bottom: 20px;
+      border-radius: 10px;
+      background: #eef2ff;
+      color: #3730a3;
+      text-align: center;
+      font-weight: 600;
+    }
+
+    #vu {
+      width: 100%;
+      height: 10px;
+      background: #e5e7eb;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+
+    #vu-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #10b981, #3b82f6);
+      transition: width 40ms linear;
+    }
+
+    /* Todo List Grid */
+    #todoCards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .todo-card {
+      background: white;
+      padding: 16px;
+      border-radius: 12px;
+      border-left: 5px solid #4f46e5;
+      box-shadow: 0 3px 6px rgba(0,0,0,0.08);
+      cursor: pointer;
+      transition: 0.15s ease;
+    }
+
+    .todo-card:hover {
+      transform: translateY(-2px);
+    }
+
+    .todo-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .todo-meta {
+      font-size: 13px;
+      color: #6b7280;
+      margin-top: 6px;
+    }
+
+    /* Recent Activity */
+    #recent {
+      margin-top: 30px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .action-box {
+      background: white;
+      padding: 16px;
+      border-radius: 12px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      border-left: 5px solid #0ea5e9;
+    }
+
+    .none-box {
+      border-left: 5px solid #f59e0b !important;
+      background: #fff7ed !important;
+    }
+
+    .label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 4px;
+    }
+
+    .value {
+      font-size: 16px;
+      margin-bottom: 10px;
+      font-weight: 500;
+      color: #1f2937;
+    }
+
+    .selected-task-card {
+      margin-top: 10px;
+      padding: 12px;
+      background: #f8fafc;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+    }
+
+    .no-action {
+      font-size: 15px;
+      font-weight: 600;
+      color: #b45309;
+      margin-top: 10px;
+    }
+
+  </style>
+</head>
+<body>
+
+  <h2>Shram Demo: Voice Todo</h2>
+
+  <div id="status">Connecting...</div>
+  <div id="vu"><div id="vu-bar"></div></div>
+
+  <h3>📋 Your Tasks</h3>
+  <div id="todoCards"></div>
+
+  <h3>🕒 Recent Activity</h3>
+  <div id="recent"></div>
+
+  <script>
+    let ws;
+    let audioContext;
+    let processor;
+    let input;
+    let stream;
+
+    let pendingUserText = "";
+
+    const statusBox = document.getElementById("status");
+    const vuBar = document.getElementById("vu-bar");
+    const todoContainer = document.getElementById("todoCards");
+    const recentContainer = document.getElementById("recent");
+
+    function connectWS() {
+      // ws = new WebSocket("ws://localhost:8000/asr/premium");
+      ws = new WebSocket("wss://voice-todo-backend.graysmoke-2eab0763.eastus.azurecontainerapps.io/asr/premium");
+      
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => {
+        statusBox.innerText = "🎙 Listening…";
+        initAudio();
+      };
+
+      ws.onmessage = (event) => {
+        let data;
+        try { data = JSON.parse(event.data); } catch { return; }
+
+        if (data.event_type === "ACKNOWLEDGED") {
+          pendingUserText = data.transcribed_text_processed || "";
+          statusBox.innerText = "🧠 Processing…";
+        }
+
+        if (data.event_type === "PROCESSED") {
+          statusBox.innerText = "🎙 Listening…";
+
+          const normalized = normalizeAllTasks(data.all_task);
+          updateTodoListUI(normalized);
+
+          const selected = normalizeSelectedTask(data.selected_task);
+          addRecentAction(pendingUserText, data.ai_response, selected);
+
+          pendingUserText = "";
+        }
+      };
+
+      ws.onclose = () => {
+        statusBox.innerText = "🔴 Reconnecting…";
+        setTimeout(connectWS, 1000);
+      };
+    }
+    connectWS();
+
+    /* ========= AUDIO SECTION ========= */
+
+    async function initAudio() {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new AudioContext({ sampleRate: 16000 });
+      await audioContext.resume();
+
+      input = audioContext.createMediaStreamSource(stream);
+      processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      let silent = audioContext.createGain();
+      silent.gain.value = 0;
+      input.connect(processor);
+      processor.connect(silent);
+      silent.connect(audioContext.destination);
+
+      processor.onaudioprocess = (e) => {
+        const buf = e.inputBuffer.getChannelData(0);
+        updateVU(buf);
+        const pcm = convertFloat32ToInt16(buf);
+        if (ws.readyState === WebSocket.OPEN) ws.send(pcm);
+      };
+    }
+
+    function convertFloat32ToInt16(buffer) {
+      const out = new Int16Array(buffer.length);
+      for (let i = 0; i < buffer.length; i++) {
+        let s = Math.max(-1, Math.min(1, buffer[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      return out.buffer;
+    }
+
+    function updateVU(buf) {
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      vuBar.style.width = Math.min(100, rms * 200) + "%";
+    }
+
+    /* ========= TODO UI ========= */
+
+    function updateTodoListUI(allTasks) {
+      todoContainer.innerHTML = "";
+
+      allTasks.forEach(task => {
+        if (!task) return;
+
+        const card = document.createElement("div");
+        card.className = "todo-card";
+
+        const time = task.scheduled_time
+          ? new Date(task.scheduled_time).toLocaleString()
+          : "No schedule";
+
+        card.innerHTML = `
+          <h4 class="todo-title">${task.title}</h4>
+          <div class="todo-meta">${time}</div>
+        `;
+
+        todoContainer.appendChild(card);
+      });
+    }
+
+    /* ========= ACTIVITY FEED ========= */
+
+    function addRecentAction(userText, ai, selectedTask) {
+      const box = document.createElement("div");
+
+      // NONE action → clear warning
+      if (ai.action === "none") {
+        box.className = "action-box none-box";
+        box.innerHTML = `
+          <div class="label">User Input</div>
+          <div class="value">${userText}</div>
+
+          <div class="no-action">
+            ⚠️ We couldn't understand your request — no action performed.
+          </div>
+        `;
+        recentContainer.prepend(box);
+        return;
+      }
+
+      box.className = "action-box";
+
+      // User input
+      box.innerHTML = `
+        <div class="label">Transcription</div>
+        <div class="value">${userText}</div>
+
+        <div class="label">Agent Response</div>
+        <div class="value">${ai.message}</div>
+      `;
+
+      // Affected task
+      if (selectedTask) {
+        box.innerHTML += `
+          <div class="selected-task-card">
+            <div class="label">Affected Task</div>
+            <div class="value"><strong>${selectedTask.title}</strong></div>
+            <div class="todo-meta">
+              ${selectedTask.scheduled_time 
+                ? new Date(selectedTask.scheduled_time).toLocaleString()
+                : "No schedule"}
+            </div>
+          </div>
+        `;
+      }
+
+      recentContainer.prepend(box);
+
+      while (recentContainer.children.length > 5) {
+        recentContainer.removeChild(recentContainer.lastChild);
+      }
+    }
+
+    /* ========= NORMALIZERS ========= */
+
+    function normalizeAllTasks(raw) {
+      if (!raw) return [];
+      if (Array.isArray(raw)) return raw;
+      if (raw.tasks && Array.isArray(raw.tasks)) return raw.tasks;
+      if (typeof raw === "object") return Object.values(raw);
+      return [];
+    }
+
+    function normalizeSelectedTask(raw) {
+      if (!raw) return null;
+      if (raw.task && Array.isArray(raw.task) && raw.task.length > 0)
+        return raw.task[0];
+      if (raw.index !== undefined) return raw;
+      return null;
+    }
+  </script>
+</body>
+</html>
