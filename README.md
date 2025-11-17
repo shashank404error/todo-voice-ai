@@ -2,6 +2,8 @@
 
 A small end-to-end demo that turns spoken commands into structured todo actions. The browser streams microphone audio to a local WebSocket server. The server uses Azure Cognitive Services Speech to transcribe audio and Gemini to interpret intent into a structured JSON action, updates an in-memory todo list, and sends results back to the UI.
 
+<img src="https://github-production-user-asset-6210df.s3.amazonaws.com/38760033/515141531-646cbd90-5c83-4d1d-8f88-f3c14452505e.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20251117%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20251117T114919Z&X-Amz-Expires=300&X-Amz-Signature=89a29e697482f1b9700f29897a8b6272be05c03ac8c2ada102051834d32f63a1&X-Amz-SignedHeaders=host" alt="Screenshot of the below operations" width="50%" height="600">
+
 ## Usage Examples
 - "Buy milk at 6pm" → `create` with `title` and RFC3339 `scheduled_time`
 - "Do I have to buy something today?" → `fetch` with `title="Buy milk at 6pm`
